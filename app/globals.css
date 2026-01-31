@@ -1,0 +1,57 @@
+@import "tailwindcss";
+
+/* PRD 6.1 Dark theme color palette - VoiceAI Dashboard (white-label for Sassle) */
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+
+  --bg-primary: #0f172a;
+  --bg-secondary: #1e293b;
+  --bg-tertiary: #334155;
+
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-tertiary: #64748b;
+
+  --accent-primary: #3b82f6;
+  --accent-success: #10b981;
+  --accent-warning: #f59e0b;
+  --accent-error: #ef4444;
+
+  --border-color: #334155;
+  --border-focus: #3b82f6;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: var(--bg-primary);
+    --foreground: var(--text-primary);
+  }
+}
+
+.dark {
+  --background: var(--bg-primary);
+  --foreground: var(--text-primary);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-inter, "Inter"), -apple-system, sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+/* PRD 6.1 Typography */
+h1 {
+  font-size: 2rem;
+  font-weight: 700;
+}
+h2 {
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+h3 {
+  font-size: 1.25rem;
+  font-weight: 600;
+}

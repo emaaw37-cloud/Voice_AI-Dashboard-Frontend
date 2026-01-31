@@ -1,0 +1,130 @@
+
+### **3.3 Call Detail Page**
+
+#### **3.3.1 Call Metadata Section**
+
+**Display Fields:**
+- Call ID (with copy button)
+- Date & Time (full timestamp with timezone)
+- Phone Number (formatted, with click-to-call if applicable)
+- Direction: Inbound / Outbound
+- Duration: "3m 45s (225 seconds)"
+- Status: Ended / Failed / In Progress
+- Sentiment: Positive / Neutral / Negative (with emoji)
+- Success: ✅ Yes / ❌ No
+- Cost: "$0.56 (Retell: $0.50, LLM: $0.06)"
+
+**Layout:**
+```
+┌──────────────────────────────────────────────┐
+│  Call Details                                │
+├──────────────────────────────────────────────┤
+│  📞 +1 (555) 123-4567  →  Inbound           │
+│  📅 January 23, 2026 at 2:45 PM EST         │
+│  ⏱️  Duration: 3m 45s (225 seconds)          │
+│  😊 Sentiment: Positive  |  ✅ Successful    │
+│  💰 Cost: $0.56                              │
+└──────────────────────────────────────────────┘
+3.3.2 Audio Player with Waveform
+Requirements:
+
+Waveform visualization (use WaveSurfer.js)
+Play/pause, seek, playback speed controls (0.5x, 1x, 1.5x, 2x)
+Synchronized transcript highlighting (current word highlights as audio plays)
+Download recording button
+
+Technical Implementation:
+javascript// WaveSurfer.js Configuration
+const wavesurfer = WaveSurfer.create({
+  container: '#waveform',
+  waveColor: '#4ADE80',      // Green (unplayed)
+  progressColor: '#60A5FA',  // Blue (played)
+  cursorColor: '#FFFFFF',
+  barWidth: 2,
+  barGap: 2,
+  height: 80,
+  responsive: true,
+  backend: 'WebAudio'
+});
+
+// Load recording from Retell S3 URL
+wavesurfer.load(call.recording_url);
+
+// Sync transcript highlighting
+wavesurfer.on('audioprocess', function(currentTime) {
+  highlightTranscriptWord(currentTime);
+});
+```
+
+**Audio Caching:**
+- Generate signed S3 URL with 1-hour expiry from Retell
+- Cache URL in Redis (key: `recording:${call_id}`, TTL: 55 minutes)
+- Regenerate URL when expired
+
+#### **3.3.3 Transcript Display**
+
+**Requirements:**
+- Speaker diarization (Agent vs Customer)
+- Click any sentence → Jump audio to that timestamp
+- Full-text search with highlight
+- Auto-scroll during playback (keeps current word in view)
+- Copy transcript button
+
+**Layout:**
+```
+┌────────────────────────────────────────────────┐
+│  Transcript                       🔍 [Search]  │
+├────────────────────────────────────────────────┤
+│                                                │
+│  🤖 Agent (0:02)                               │
+│  Hi, this is calling from Sassle AI. How      │
+│  can I help you today?                         │
+│                                                │
+│  👤 Customer (0:07)                            │
+│  Yes, I'm interested in learning more about    │
+│  your hair restoration services.               │
+│                                                │
+│  🤖 Agent (0:12)                               │
+│  Great! I'd be happy to help. What's the       │
+│  best time to schedule a consultation?         │
+│                                                │
+└────────────────────────────────────────────────┘
+Data Structure (from Retell API):
+json{
+  "transcript_object": [
+    {
+      "role": "agent",
+      "content": "Hi, this is calling from Sassle AI. How can I help you today?",
+      "words": [
+        { "word": "Hi", "start": 2.1, "end": 2.3 },
+        { "word": "this", "start": 2.4, "end": 2.6 }
+      ]
+    },
+    {
+      "role": "user",
+      "content": "Yes, I'm interested in...",
+      "words": [...]
+    }
+  ]
+}
+Click-to-Seek Implementation:
+javascriptfunction onTranscriptClick(timestamp) {
+  wavesurfer.seekTo(timestamp / wavesurfer.getDuration());
+  wavesurfer.play();
+}
+Search Functionality:
+javascriptGET /api/calls/search?q=interested&call_id=abc123
+
+// Returns matching segments with context
+Response:
+{
+  "matches": [
+    {
+      "segment_index": 1,
+      "role": "user",
+      "content": "Yes, I'm interested in learning more...",
+      "timestamp": 7.2,
+      "highlight": "I'm <mark>interested</mark> in learning"
+    }
+  ]
+}
