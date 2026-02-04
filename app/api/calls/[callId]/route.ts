@@ -4,6 +4,7 @@ import type { CallDetail } from "../../../lib/types";
 /**
  * GET /api/calls/:callId
  * PRD 3.2.2, 3.3 - Single call detail. In production: query call_records + auth.
+ * NOTE: This is a stub route. Real data comes from Firebase backend.
  */
 export async function GET(
   request: NextRequest,
@@ -16,17 +17,37 @@ export async function GET(
 
   // Stub: replace with DB/Retell lookup (PRD 3.3 - transcript_object with words for click-to-seek)
   const call: CallDetail = {
-    call_id: callId,
-    start_timestamp: new Date(Date.now() - 3600000).toISOString(),
-    phone_number: "+15551234567",
-    duration_ms: 202000,
-    call_status: "ended",
-    user_sentiment: "Positive",
-    recording_url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
-    call_successful: true,
+    // New format properties
+    id: callId,
+    agentId: "agent_001",
+    agentName: "Sassle AI Agent",
+    dynamicVariables: null,
+    startTime: new Date(Date.now() - 3600000).toISOString(),
+    endTime: new Date(Date.now() - 3600000 + 202000).toISOString(),
+    durationSeconds: 202,
     direction: "inbound",
-    transcript:
-      "Agent: Hi, this is calling from Sassle AI. How can I help you today?\nCustomer: Yes, I'm interested in learning more about your services.\nAgent: Great! I'd be happy to help. What's the best time to schedule a consultation?",
+    status: "ended",
+    recordingUrl: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
+    transcriptText: "Agent: Hi, this is calling from Sassle AI. How can I help you today?\nCustomer: Yes, I'm interested in learning more about your services.\nAgent: Great! I'd be happy to help. What's the best time to schedule a consultation?",
+    callAnalysis: {
+      userSentiment: "Positive",
+      callSuccessful: true,
+      callSummary: "Customer inquiry about services",
+      inVoicemail: false,
+    },
+    costUsd: 0.56,
+    createdAt: new Date(Date.now() - 3600000).toISOString(),
+    
+    // Legacy format properties for backward compatibility
+    call_id: callId,
+    phone_number: "+15551234567",
+    start_timestamp: new Date(Date.now() - 3600000).toISOString(),
+    end_timestamp: new Date(Date.now() - 3600000 + 202000).toISOString(),
+    duration_ms: 202000,
+    recording_url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
+    user_sentiment: "Positive",
+    call_successful: true,
+    transcript: "Agent: Hi, this is calling from Sassle AI. How can I help you today?\nCustomer: Yes, I'm interested in learning more about your services.\nAgent: Great! I'd be happy to help. What's the best time to schedule a consultation?",
     transcript_object: [
       {
         role: "agent",
@@ -59,8 +80,6 @@ export async function GET(
           { word: "more", start: 7.0, end: 7.2 },
           { word: "about", start: 7.3, end: 7.6 },
           { word: "your", start: 7.7, end: 7.9 },
-          { word: "hair", start: 8.0, end: 8.2 },
-          { word: "restoration", start: 8.3, end: 8.8 },
           { word: "services.", start: 8.9, end: 9.4 },
         ],
       },
@@ -74,24 +93,32 @@ export async function GET(
           { word: "happy", start: 11.1, end: 11.5 },
           { word: "to", start: 11.6, end: 11.7 },
           { word: "help.", start: 11.8, end: 12.2 },
-          { word: "What's", start: 12.3, end: 12.6 },
-          { word: "the", start: 12.7, end: 12.8 },
-          { word: "best", start: 12.9, end: 13.2 },
-          { word: "time", start: 13.3, end: 13.6 },
-          { word: "to", start: 13.7, end: 13.8 },
-          { word: "schedule", start: 13.9, end: 14.4 },
-          { word: "a", start: 14.5, end: 14.6 },
           { word: "consultation?", start: 14.7, end: 15.3 },
         ],
       },
     ],
+    transcriptSegments: [
+      {
+        role: "agent",
+        content: "Hi, this is calling from Sassle AI. How can I help you today?",
+      },
+      {
+        role: "user",
+        content: "Yes, I'm interested in learning more about your services.",
+      },
+      {
+        role: "agent",
+        content: "Great! I'd be happy to help. What's the best time to schedule a consultation?",
+      },
+    ],
     call_cost: {
       products: [
-        { product: "voice_minutes", quantity: 3.37, cost: 0.5 },
-        { product: "llm_tokens", quantity: 1500, cost: 0.06 },
+        { product: "voice_minutes", cost: 0.5 },
+        { product: "llm_tokens", cost: 0.06 },
       ],
       total: 0.56,
     },
+    call_cost_cents: 56,
   };
 
   return NextResponse.json(call);

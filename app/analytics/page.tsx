@@ -3,9 +3,10 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { onAuthStateChanged, type User } from "firebase/auth";
-import { httpsCallable } from "firebase/functions";
-import { auth, functions } from "../lib/firebase";
-import type { CallRecord, CallsListResponse } from "../lib/types";
+import { auth } from "../lib/firebase";
+import { useCalls } from "../lib/useCalls";
+import { useAgents } from "../lib/useAgents";
+import type { CallRecord } from "../lib/types";
 import { Topbar } from "../components/Topbar";
 import { Loader } from "../components/Loader";
 import { formatSeconds } from "../lib/functions";
@@ -37,48 +38,69 @@ interface SentimentTrend {
 export default function AnalyticsPage() {
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
-  const [ready, setReady] = useState(false);
-  const [calls, setCalls] = useState<CallRecord[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [authReady, setAuthReady] = useState(false);
   const [selectedMetric, setSelectedMetric] = useState<"success" | "sentiment" | "duration">("success");
+  const [selectedAgentId, setSelectedAgentId] = useState<string>("all");
 
+  // Fetch calls directly from Firestore with caching
+  const { 
+    calls: allCalls, 
+    loading: callsLoading, 
+    error,
+    ready: callsReady 
+  } = useCalls(user?.uid, { 
+    pageSize: 200,     // Larger batches for analytics
+    maxCalls: 1000,    // Need more data for analytics
+    enabled: !!user,   // Only fetch when user is authenticated
+  });
+
+  // Fetch registered agents from API (only when authenticated)
+  const { 
+    agents: registeredAgents, 
+    loading: agentsLoading,
+    ready: agentsReady 
+  } = useAgents(user, {
+    enabled: !!user, // Only fetch when user is authenticated
+  });
+
+  // Handle authentication state
   useEffect(() => {
     if (!auth) {
-      setReady(true);
+      setAuthReady(true);
       router.replace("/login");
       return;
     }
     const unsub = onAuthStateChanged(auth, (u) => {
       setUser(u);
-      setReady(true);
+      setAuthReady(true);
       if (!u) router.replace("/login");
     });
     return () => unsub();
   }, [router]);
 
-  useEffect(() => {
-    if (!user || !functions) return;
-
-    const fetchCalls = async () => {
-      setLoading(true);
-      try {
-        const getCalls = httpsCallable<
-          { page: number; limit: number; sort: string },
-          CallsListResponse
-        >(functions!, "getCalls");
-        const result = await getCalls({ page: 1, limit: 1000, sort: "desc" });
-        if (result?.data?.calls) {
-          setCalls(result.data.calls);
-        }
-      } catch (error) {
-        console.error("Error fetching calls:", error);
-      } finally {
-        setLoading(false);
+  // Combine registered agents with agents from calls
+  const allAgents = useMemo(() => {
+    const agentMap = new Map<string, { id: string; name: string }>();
+    registeredAgents.forEach((agent) => {
+      agentMap.set(agent.agentId, { id: agent.agentId, name: agent.agentName || agent.agentId });
+    });
+    allCalls.forEach((call) => {
+      if (call.agentId && !agentMap.has(call.agentId)) {
+        agentMap.set(call.agentId, { id: call.agentId, name: call.agentName || call.agentId });
       }
-    };
+    });
+    return Array.from(agentMap.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [allCalls, registeredAgents]);
 
-    fetchCalls();
-  }, [user]);
+  // Filter calls by selected agent
+  const calls = useMemo(() => {
+    if (selectedAgentId === "all") return allCalls;
+    return allCalls.filter((c) => c.agentId === selectedAgentId);
+  }, [allCalls, selectedAgentId]);
+
+  // Combined loading state
+  const dataLoading = !!user && (callsLoading || agentsLoading) && (!callsReady || !agentsReady);
+  const loading = !authReady || dataLoading;
 
   const agentStats = useMemo<AgentStats[]>(() => {
     const agentMap = new Map<string, AgentStats>();
@@ -184,7 +206,7 @@ export default function AnalyticsPage() {
     };
   }, [calls]);
 
-  if (!ready || loading) {
+  if (loading) {
     return (
       <main className="min-h-screen bg-slate-950 text-slate-50">
         <Topbar />
@@ -200,10 +222,37 @@ export default function AnalyticsPage() {
       <Topbar />
       <div className="mx-auto max-w-7xl px-6 py-8">
         <header className="mb-6">
-          <h1 className="text-3xl font-bold text-slate-50">Analytics Dashboard</h1>
-          <p className="mt-2 text-slate-400">
-            Comprehensive insights into agent performance and call sentiment trends
-          </p>
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h1 className="text-3xl font-bold text-slate-50">Analytics Dashboard</h1>
+              <p className="mt-2 text-slate-400">
+                Comprehensive insights into agent performance and call sentiment trends
+              </p>
+            </div>
+            <div className="flex items-center gap-3">
+              <label className="text-xs text-slate-400">Filter by Agent:</label>
+              <select
+                value={selectedAgentId}
+                onChange={(e) => setSelectedAgentId(e.target.value)}
+                className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-500/40"
+              >
+                <option value="all">All Agents ({allAgents.length})</option>
+                {allAgents.map((agent) => (
+                  <option key={agent.id} value={agent.id}>
+                    {agent.name}
+                  </option>
+                ))}
+              </select>
+              {selectedAgentId !== "all" && (
+                <button
+                  onClick={() => setSelectedAgentId("all")}
+                  className="rounded-lg bg-slate-800 px-3 py-2 text-xs text-slate-400 hover:bg-slate-700 hover:text-slate-200"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+          </div>
         </header>
 
         {/* Overall Stats */}

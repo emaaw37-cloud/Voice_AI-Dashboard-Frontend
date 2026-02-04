@@ -13,7 +13,7 @@ import {
 import { WaveformPlayer, type WaveformPlayerHandle } from "../../../components/WaveformPlayer";
 import type { CallDetail, TranscriptSegment } from "../../../lib/types";
 
-const BACKEND_BASE = process.env.NEXT_PUBLIC_BACKEND_URL_BASE || "http://127.0.0.1:5001/saedevmng/us-central1";
+const BACKEND_BASE = process.env.NEXT_PUBLIC_BACKEND_URL_BASE || "";
 
 function formatDateTime(iso: string) {
   const d = new Date(iso);
@@ -118,7 +118,7 @@ export default function CallDetailPage() {
     if (!call?.transcript_object?.length) return call?.transcript ?? "";
     return call.transcript_object
       .map(
-        (s) =>
+        (s: TranscriptSegment) =>
           `${s.role === "agent" ? "Agent" : "Customer"}: ${s.content}`
       )
       .join("\n\n");
@@ -135,7 +135,7 @@ export default function CallDetailPage() {
     if (!call?.transcript_object) return [];
     const q = transcriptSearch.trim().toLowerCase();
     if (!q) return call.transcript_object;
-    return call.transcript_object.filter((s) =>
+    return call.transcript_object.filter((s: TranscriptSegment) =>
       s.content.toLowerCase().includes(q)
     );
   }, [call?.transcript_object, transcriptSearch]);
@@ -172,12 +172,14 @@ export default function CallDetailPage() {
     );
   }
 
-  const durationSec = Math.floor(call.duration_ms / 1000);
+  const durationSec = call.duration_ms 
+    ? Math.floor(call.duration_ms / 1000) 
+    : call.durationSeconds ?? 0;
   const costTotal = call.call_cost?.total ?? (call.call_cost_cents ? call.call_cost_cents / 100 : 0);
   const costBreakdown =
     call.call_cost?.products?.length
       ? call.call_cost.products
-          .map((p) =>
+          .map((p: { product: string; cost: number }) =>
             p.product === "voice_minutes"
               ? `Retell: ${formatUSD(p.cost)}`
               : p.product === "llm_tokens"
@@ -215,10 +217,10 @@ export default function CallDetailPage() {
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-slate-500">📞</span>
             <a
-              href={`tel:${call.phone_number}`}
+              href={`tel:${call.phone_number ?? ""}`}
               className="font-medium text-sky-400 hover:underline"
             >
-              {formatPhone(call.phone_number)}
+              {formatPhone(call.phone_number ?? "Unknown")}
             </a>
             <span className="text-slate-500">→</span>
             <span className="text-slate-300 capitalize">
@@ -228,7 +230,7 @@ export default function CallDetailPage() {
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-slate-500">📅</span>
             <span className="text-slate-200">
-              {formatDateTime(call.start_timestamp)}
+              {formatDateTime(call.start_timestamp ?? call.startTime)}
             </span>
           </div>
           <div className="flex flex-wrap items-center gap-2">

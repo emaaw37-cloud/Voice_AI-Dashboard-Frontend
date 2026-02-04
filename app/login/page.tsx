@@ -2,16 +2,30 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { signInWithEmailAndPassword } from "firebase/auth";
-import { auth } from "../lib/firebase";
+import { doc, getDoc } from "firebase/firestore";
+import { auth, db } from "../lib/firebase";
+import { useAuth } from "../context/AuthContext";
 
 export default function LoginPage() {
   const router = useRouter();
+  const { user, role, loading: authLoading } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Redirect if already logged in
+  useEffect(() => {
+    if (!authLoading && user && role) {
+      if (role === "admin") {
+        router.replace("/admin-dashboard");
+      } else {
+        router.replace("/dashbord");
+      }
+    }
+  }, [user, role, authLoading, router]);
 
   const canSubmit = useMemo(() => {
     return email.trim().length > 3 && password.length >= 8 && !submitting;
@@ -22,12 +36,37 @@ export default function LoginPage() {
     setError(null);
     setSubmitting(true);
     try {
-      if (!auth) {
+      if (!auth || !db) {
         setError("App not configured. Check Firebase in .env.local.");
         return;
       }
-      await signInWithEmailAndPassword(auth, email.trim(), password);
-      router.replace("/connect-apis");
+      
+      // Sign in with Firebase Auth
+      const credential = await signInWithEmailAndPassword(auth, email.trim(), password);
+      
+      // Fetch user role from Firestore
+      const userRef = doc(db, "users", credential.user.uid);
+      const userSnap = await getDoc(userRef);
+      
+      if (!userSnap.exists()) {
+        setError("User profile not found. Contact administrator.");
+        return;
+      }
+      
+      const userData = userSnap.data();
+      
+      // Check if user is active
+      if (userData.isActive === false) {
+        setError("Your account has been deactivated. Contact administrator.");
+        return;
+      }
+      
+      // Redirect based on role
+      if (userData.role === "admin") {
+        router.replace("/admin-dashboard");
+      } else {
+        router.replace("/dashbord");
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Login failed";
       setError(msg);

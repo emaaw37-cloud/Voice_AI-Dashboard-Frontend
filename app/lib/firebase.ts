@@ -1,7 +1,7 @@
 import { initializeApp, getApps, getApp, type FirebaseApp } from "firebase/app";
 import { getAuth, type Auth } from "firebase/auth";
 import { getFirestore, type Firestore } from "firebase/firestore";
-import { getFunctions, connectFunctionsEmulator, type Functions } from "firebase/functions";
+import { getFunctions, type Functions } from "firebase/functions";
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY ?? "",
@@ -24,14 +24,6 @@ try {
   _auth = getAuth(app);
   _db = getFirestore(app);
   _functions = getFunctions(app);
-  const base = process.env.NEXT_PUBLIC_BACKEND_URL_BASE ?? "";
-  if (base.includes("127.0.0.1") || base.includes("localhost")) {
-    try {
-      connectFunctionsEmulator(_functions, "127.0.0.1", 5001);
-    } catch {
-      // ignore if already connected
-    }
-  }
 } catch (e) {
   console.error("Firebase init failed (app will run with limited features):", e);
 }

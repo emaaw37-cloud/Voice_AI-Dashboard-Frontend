@@ -4,25 +4,16 @@ import { useEffect, useMemo, useState, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { onAuthStateChanged, type User } from "firebase/auth";
-import { httpsCallable } from "firebase/functions";
-import { auth, functions } from "../lib/firebase";
+import { auth } from "../lib/firebase";
+import { useCalls } from "../lib/useCalls";
 import { formatSeconds, formatUSD, formatDurationShort } from "../lib/functions";
-import type { DashboardOverview, CallRecord, CallsListResponse } from "../lib/types";
+import type { DashboardOverview, CallRecord } from "../lib/types";
 
-/** Backend getDashboardOverview (callable) response shape */
-interface CallableOverviewResponse {
-  totalCalls?: number;
-  totalMinutes?: number;
-  totalCostUsd?: number;
-  inboundCalls?: number;
-  outboundCalls?: number;
-  avgCallDurationSeconds?: number;
-  dailyCallCounts?: Record<string, number>;
-}
-
-/** Maps callable response to UI shape. Safe: never throws, defaults missing numerics to 0. */
-function mapCallableOverviewToDashboard(res: CallableOverviewResponse | null | undefined): DashboardOverview {
-  if (res == null || typeof res !== "object") {
+/**
+ * Computes dashboard overview from call records (client-side aggregation)
+ */
+function computeOverviewFromCalls(calls: CallRecord[]): DashboardOverview {
+  if (!calls || calls.length === 0) {
     return {
       total_calls_this_month: 0,
       total_calls_last_month: 0,
@@ -34,18 +25,37 @@ function mapCallableOverviewToDashboard(res: CallableOverviewResponse | null | u
       last_month_cost_total: 0,
     };
   }
-  const totalCalls = Number(res.totalCalls) || 0;
-  const totalCostUsd = Number(res.totalCostUsd) || 0;
-  const avgCallDurationSeconds = Number(res.avgCallDurationSeconds) || 0;
-  const daily = res.dailyCallCounts && typeof res.dailyCallCounts === "object" ? res.dailyCallCounts : {};
-  const sparkline_data = Object.entries(daily)
-    .sort((a, b) => String(a[0]).localeCompare(String(b[0])))
-    .map(([, v]) => Number(v) || 0);
+
+  // Current month bounds
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+
+  // Filter calls for current month
+  const currentMonthCalls = calls.filter((c) => new Date(c.startTime) >= monthStart);
+
+  const totalCalls = currentMonthCalls.length;
+  const totalCostUsd = currentMonthCalls.reduce((sum, c) => sum + (c.costUsd || 0), 0);
+  const totalDuration = currentMonthCalls.reduce((sum, c) => sum + (c.durationSeconds || 0), 0);
+  const avgDuration = totalCalls > 0 ? totalDuration / totalCalls : 0;
+  const successfulCalls = currentMonthCalls.filter((c) => c.callAnalysis?.callSuccessful).length;
+  const successRate = totalCalls > 0 ? successfulCalls / totalCalls : 0;
+
+  // Build daily counts for sparkline
+  const dailyCounts: Record<string, number> = {};
+  currentMonthCalls.forEach((c) => {
+    const dateKey = new Date(c.startTime).toISOString().slice(0, 10);
+    dailyCounts[dateKey] = (dailyCounts[dateKey] || 0) + 1;
+  });
+
+  const sparkline_data = Object.entries(dailyCounts)
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([, v]) => v);
+
   return {
     total_calls_this_month: totalCalls,
     total_calls_last_month: 0,
-    success_rate: totalCalls > 0 ? 1 : 0,
-    avg_duration_seconds: avgCallDurationSeconds,
+    success_rate: successRate,
+    avg_duration_seconds: avgDuration,
     avg_duration_last_month_seconds: 0,
     sparkline_data,
     current_month_cost: {
@@ -58,7 +68,8 @@ function mapCallableOverviewToDashboard(res: CallableOverviewResponse | null | u
   };
 }
 
-const POLL_INTERVAL_MS = 30 * 1000;
+// Refresh interval - longer due to caching (2 minutes)
+const REFRESH_INTERVAL_MS = 2 * 60 * 1000;
 
 function formatDateTime(iso: string) {
   const d = new Date(iso);
@@ -196,140 +207,54 @@ function StatCard({ card }: { card: StatCardConfig }) {
 export default function DashbordPage() {
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
-  const [overview, setOverview] = useState<DashboardOverview | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
 
-  const [overviewError, setOverviewError] = useState<string | null>(null);
-  const [callsData, setCallsData] = useState<CallsListResponse | null>(null);
-  const [callsError, setCallsError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [callsLoading, setCallsLoading] = useState(true);
+  // Wait for auth before fetching calls
+  const { 
+    calls: allCalls, 
+    loading: callsLoading, 
+    error: callsError, 
+    refetch,
+    ready: callsReady 
+  } = useCalls(user?.uid, {
+    maxCalls: 500,
+    enabled: !!user, // Only fetch when user is authenticated
+  });
 
-  const fetchOverview = useCallback(async (_token?: string) => {
-    setOverviewError(null);
-    if (!functions) {
-      setOverview(mapCallableOverviewToDashboard(null));
-      setOverviewError("Dashboard overview is temporarily unavailable.");
-      return;
-    }
-    try {
-      const getDashboardOverview = httpsCallable<
-        Record<string, never>,
-        CallableOverviewResponse
-      >(functions, "getDashboardOverview");
-      const result = await getDashboardOverview({});
-      const payload = result?.data;
-      if (payload == null || typeof payload !== "object") {
-        setOverview(mapCallableOverviewToDashboard(null));
-        return;
-      }
-      setOverview(mapCallableOverviewToDashboard(payload as CallableOverviewResponse));
-    } catch (e: unknown) {
-      if (process.env.NODE_ENV === "development") console.warn(e);
-      setOverview(mapCallableOverviewToDashboard(null));
-      setOverviewError(
-        e instanceof Error ? e.message : "Dashboard overview is temporarily unavailable."
-      );
-    }
-  }, []);
+  // Compute overview from calls client-side
+  const overview = useMemo(() => computeOverviewFromCalls(allCalls), [allCalls]);
 
-  const emptyCalls: CallsListResponse = useMemo(
-    () => ({
-      calls: [],
-      pagination: { current_page: 1, total_pages: 0, total_calls: 0 },
-    }),
-    []
-  );
+  // Recent calls (first 20)
+  const recentCalls = useMemo(() => allCalls.slice(0, 20), [allCalls]);
 
-  const fetchCalls = useCallback(async () => {
-    setCallsError(null);
-    setCallsLoading(true);
-    try {
-      const token = await user?.getIdToken();
-      if (!token) {
-        setCallsData(emptyCalls);
-        setCallsLoading(false);
-        return;
-      }
-
-      const response = await fetch("http://127.0.0.1:5001/saedevmng/us-central1/getCalls", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${token}`,
-        },
-        body: JSON.stringify({ page: 1, limit: 20, sort: "desc" }),
-      });
-
-      if (!response.ok) {
-        throw new Error("Failed to fetch calls");
-      }
-
-      const data = await response.json();
-      
-      // Backend returns { calls, total, page, limit }, convert to frontend format
-      setCallsData({
-        calls: data.calls || [],
-        pagination: {
-          current_page: data.page || 1,
-          total_pages: Math.ceil((data.total || 0) / (data.limit || 20)),
-          total_calls: data.total || 0,
-        },
-      });
-    } catch (e: unknown) {
-      if (process.env.NODE_ENV === "development") console.warn(e);
-      setCallsData(emptyCalls);
-      setCallsError(
-        e instanceof Error ? e.message : "Recent calls are temporarily unavailable."
-      );
-    } finally {
-      setCallsLoading(false);
-    }
-  }, [emptyCalls, user]);
-
+  // Handle authentication state
   useEffect(() => {
     if (!auth) {
-      setLoading(false);
+      setAuthLoading(false);
       return;
     }
-    const unsub = onAuthStateChanged(auth, (u) => setUser(u ?? null));
+    const unsub = onAuthStateChanged(auth, (u) => {
+      setUser(u ?? null);
+      setAuthLoading(false);
+    });
     return () => unsub();
   }, []);
 
-  useEffect(() => {
-    if (!user) {
-      setLoading(false);
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      try {
-        if (cancelled) return;
-        await Promise.all([fetchOverview(), fetchCalls()]);
-      } catch (e) {
-        if (!cancelled) {
-          if (process.env.NODE_ENV === "development") console.warn(e);
-          setOverview(null);
-          setOverviewError("Unable to load dashboard overview.");
-          setCallsData(null);
-          setCallsError("Unable to load recent calls.");
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [user, fetchOverview, fetchCalls]);
-
+  // Refresh data periodically (less frequent due to caching)
   useEffect(() => {
     if (!user) return;
+    
     const interval = setInterval(() => {
-      fetchOverview();
-      fetchCalls();
-    }, POLL_INTERVAL_MS);
+      // Safe to call - refetch checks user internally
+      // Will skip if cache is still fresh
+      refetch();
+    }, REFRESH_INTERVAL_MS);
+    
     return () => clearInterval(interval);
-  }, [user, fetchOverview, fetchCalls]);
+  }, [user, refetch]);
+
+  // Combined loading state: waiting for auth OR waiting for initial data fetch
+  const loading = authLoading || (!!user && callsLoading && !callsReady);
 
   const cards: StatCardConfig[] = useMemo(() => {
     if (!overview) {
@@ -409,41 +334,16 @@ export default function DashbordPage() {
     ];
   }, [overview]);
 
-  const calls: CallRecord[] = useMemo(
-    () => callsData?.calls ?? [],
-    [callsData]
-  );
-
-  const handleRetryOverview = useCallback(async () => {
-    try {
-      await fetchOverview();
-    } catch (e) {
-      if (process.env.NODE_ENV === "development") console.warn(e);
-    }
-  }, [fetchOverview]);
-
   const handleRetryCalls = useCallback(async () => {
     try {
-      await fetchCalls();
+      await refetch();
     } catch (e) {
       if (process.env.NODE_ENV === "development") console.warn(e);
     }
-  }, [fetchCalls]);
+  }, [refetch]);
 
   return (
     <div className="space-y-6">
-      {overviewError && (
-        <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200 flex items-center justify-between gap-3 flex-wrap">
-          <span>{overviewError}</span>
-          <button
-            type="button"
-            onClick={handleRetryOverview}
-            className="rounded-xl bg-amber-500/20 px-3 py-1.5 text-xs font-medium text-amber-200 hover:bg-amber-500/30"
-          >
-            Retry
-          </button>
-        </div>
-      )}
       {/* PRD 3.2.1 - 4 cards, responsive 2x2 on mobile */}
       <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {cards.map((card) => (
@@ -465,7 +365,11 @@ export default function DashbordPage() {
           <div className="flex items-center gap-3">
             {callsError && (
               <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-200 flex items-center gap-2">
-                <span>{callsError}</span>
+                <span>
+                  {callsError.includes("permission") || callsError.includes("insufficient")
+                    ? "Missing or insufficient permissions. Please contact admin to set up your account."
+                    : callsError}
+                </span>
                 <button
                   type="button"
                   onClick={handleRetryCalls}
@@ -497,20 +401,20 @@ export default function DashbordPage() {
               </tr>
             </thead>
             <tbody>
-              {callsLoading && calls.length === 0 ? (
+              {(loading || callsLoading) && recentCalls.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="py-8 text-center text-slate-500">
                     Loading calls…
                   </td>
                 </tr>
-              ) : calls.length === 0 ? (
+              ) : recentCalls.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="py-8 text-center text-slate-500">
                     No calls yet.
                   </td>
                 </tr>
               ) : (
-                calls.map((row) => {
+                recentCalls.map((row) => {
                   const sentiment = row.callAnalysis?.userSentiment || "Unknown";
                   const isSuccessful = row.callAnalysis?.callSuccessful ?? false;
                   const isEnded = row.status === "ended";

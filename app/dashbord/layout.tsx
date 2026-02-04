@@ -2,9 +2,8 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
-import { onAuthStateChanged, signOut, type User } from "firebase/auth";
-import { auth } from "../lib/firebase";
+import { useEffect, useMemo } from "react";
+import { useAuth } from "../context/AuthContext";
 import { Sidebar, type SidebarItem } from "../components/Sidebar";
 import { Loader } from "../components/Loader";
 import { SupportWidget } from "../components/SupportWidget";
@@ -24,27 +23,22 @@ export default function DashbordLayout({
 }) {
   const router = useRouter();
   const pathname = usePathname();
-  const [user, setUser] = useState<User | null>(null);
-  const [ready, setReady] = useState(false);
+  const { user, role, loading, signOut } = useAuth();
 
+  // Redirect if not authenticated or not a user role
   useEffect(() => {
-    if (!auth) {
-      setReady(true);
+    if (loading) return;
+    
+    if (!user) {
       router.replace("/login");
       return;
     }
-    const unsub = onAuthStateChanged(auth, (u) => {
-      if (!u) {
-        setUser(null);
-        setReady(true);
-        router.replace("/login");
-        return;
-      }
-      setUser(u);
-      setReady(true);
-    });
-    return () => unsub();
-  }, [router]);
+    
+    // Redirect admins to admin dashboard
+    if (role === "admin") {
+      router.replace("/admin-dashboard");
+    }
+  }, [user, role, loading, router]);
 
   const title = useMemo(() => {
     const hit = NAV.find((n) => n.href === pathname);
@@ -52,15 +46,11 @@ export default function DashbordLayout({
   }, [pathname]);
 
   async function doLogout() {
-    if (!auth) {
-      router.push("/login");
-      return;
-    }
-    await signOut(auth);
+    await signOut();
     router.push("/login");
   }
 
-  if (!ready) {
+  if (loading) {
     return (
       <main className="min-h-screen bg-slate-950 text-slate-50">
         <div className="mx-auto max-w-6xl px-6 py-10">
@@ -68,6 +58,11 @@ export default function DashbordLayout({
         </div>
       </main>
     );
+  }
+
+  // Don't render if not authenticated or is admin
+  if (!user || role === "admin") {
+    return null;
   }
 
   return (

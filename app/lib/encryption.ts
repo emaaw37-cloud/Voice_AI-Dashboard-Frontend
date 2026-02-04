@@ -5,16 +5,30 @@
 
 import crypto from "crypto";
 
-const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || "default-key-change-in-production-32-chars!!";
 const ALGORITHM = "aes-256-gcm";
 
 /**
  * Get encryption key (32 bytes for AES-256)
+ * Throws if ENCRYPTION_KEY env var is not set in production
  */
 function getKey(): Buffer {
-  // Ensure key is exactly 32 bytes
-  const key = Buffer.from(ENCRYPTION_KEY.slice(0, 32).padEnd(32, "0"), "utf-8");
-  return key;
+  const encryptionKey = process.env.ENCRYPTION_KEY;
+  
+  if (!encryptionKey) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("ENCRYPTION_KEY environment variable is required in production");
+    }
+    // Development fallback - NEVER use in production
+    console.warn("[DEV ONLY] Using development encryption key. Set ENCRYPTION_KEY in production!");
+    return Buffer.from("dev-only-key-not-for-production!!", "utf-8");
+  }
+  
+  // Ensure key is exactly 32 bytes for AES-256
+  if (encryptionKey.length < 32) {
+    throw new Error("ENCRYPTION_KEY must be at least 32 characters");
+  }
+  
+  return Buffer.from(encryptionKey.slice(0, 32), "utf-8");
 }
 
 /**

@@ -54,8 +54,27 @@ export interface CallsListResponse {
 
 /** GET /api/calls/:id - PRD 3.3 */
 export interface CallDetail extends CallRecord {
-  // CallRecord already has transcriptText and callAnalysis
-  // Add any additional fields specific to detail view here if needed
+  // Additional fields for detail view
+  transcriptSegments?: TranscriptSegment[];
+  
+  // Legacy property aliases for backward compatibility
+  call_id: string;
+  phone_number?: string;
+  start_timestamp?: string;
+  end_timestamp?: string;
+  duration_ms?: number;
+  recording_url?: string | null;
+  transcript?: string | null;
+  transcript_object?: TranscriptSegment[];
+  user_sentiment?: string | null;
+  call_successful?: boolean | null;
+  call_summary?: string | null;
+  in_voicemail?: boolean | null;
+  call_cost?: {
+    total: number;
+    products?: Array<{ product: string; cost: number }>;
+  };
+  call_cost_cents?: number;
 }
 
 export interface TranscriptSegment {
@@ -164,4 +183,17 @@ export interface KeyConnectionStatus {
   connected: boolean;
   connected_at?: string;
   last_validated_at?: string;
+}
+
+/** Agent registered for the user */
+export interface Agent {
+  agentId: string;
+  agentName: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** GET /getAgents response */
+export interface AgentsResponse {
+  agents: Agent[];
 }

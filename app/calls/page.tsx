@@ -4,9 +4,10 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { onAuthStateChanged, type User } from "firebase/auth";
-import { httpsCallable } from "firebase/functions";
-import { auth, functions } from "../lib/firebase";
-import type { CallRecord, CallsListResponse } from "../lib/types";
+import { auth } from "../lib/firebase";
+import { useCalls } from "../lib/useCalls";
+import { useAgents } from "../lib/useAgents";
+import type { CallRecord, Agent } from "../lib/types";
 import { formatSeconds, formatUSD } from "../lib/functions";
 import { Topbar } from "../components/Topbar";
 import { Loader } from "../components/Loader";
@@ -14,78 +15,83 @@ import { Loader } from "../components/Loader";
 export default function CallsPage() {
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
-  const [ready, setReady] = useState(false);
-  const [calls, setCalls] = useState<CallRecord[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [query, setQuery] = useState("");
+  const [authReady, setAuthReady] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
   const [selectedAgent, setSelectedAgent] = useState<string>("all");
   const [selectedSentiment, setSelectedSentiment] = useState<string>("all");
   const [selectedStatus, setSelectedStatus] = useState<string>("all");
 
+  // Fetch calls directly from Firestore with pagination
+  const { 
+    calls, 
+    loading: callsLoading, 
+    error: callsError,
+    ready: callsReady,
+    loadMore,
+    hasMore,
+    totalLoaded,
+  } = useCalls(user?.uid, { 
+    pageSize: 100,     // Fetch in batches of 100
+    maxCalls: 1000,    // Allow loading up to 1000 calls
+    enabled: !!user,   // Only fetch when user is authenticated
+  });
+
+  // Fetch registered agents from API (only when authenticated)
+  const { 
+    agents: registeredAgents, 
+    loading: agentsLoading,
+    ready: agentsReady 
+  } = useAgents(user, {
+    enabled: !!user, // Only fetch when user is authenticated
+  });
+
+  // Handle authentication state
   useEffect(() => {
     if (!auth) {
-      setReady(true);
+      setAuthReady(true);
       router.replace("/login");
       return;
     }
     const unsub = onAuthStateChanged(auth, (u) => {
       setUser(u);
-      setReady(true);
+      setAuthReady(true);
       if (!u) router.replace("/login");
     });
     return () => unsub();
   }, [router]);
 
-  useEffect(() => {
-    if (!user) return;
-
-    const fetchCalls = async () => {
-      setLoading(true);
-      try {
-        const token = await user.getIdToken();
-        const response = await fetch("http://127.0.0.1:5001/saedevmng/us-central1/getCalls", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${token}`,
-          },
-          body: JSON.stringify({ page: 1, limit: 500, sort: "desc" }),
-        });
-
-        if (!response.ok) {
-          throw new Error("Failed to fetch calls");
-        }
-
-        const data = await response.json();
-        if (data?.calls) {
-          setCalls(data.calls);
-        }
-      } catch (error) {
-        console.error("Error fetching calls:", error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchCalls();
-  }, [user]);
-
-  const uniqueAgents = useMemo(() => {
-    const agents = new Set<string>();
+  // Combine registered agents with agents from calls for complete list
+  const allAgents = useMemo(() => {
+    const agentMap = new Map<string, { id: string; name: string }>();
+    
+    // Add registered agents first (these have proper names)
+    registeredAgents.forEach((agent) => {
+      agentMap.set(agent.agentId, {
+        id: agent.agentId,
+        name: agent.agentName || agent.agentId,
+      });
+    });
+    
+    // Add agents from calls that aren't already registered
     calls.forEach((call) => {
-      if (call.agentName) {
-        agents.add(call.agentName);
+      if (call.agentId && !agentMap.has(call.agentId)) {
+        agentMap.set(call.agentId, {
+          id: call.agentId,
+          name: call.agentName || call.agentId,
+        });
       }
     });
-    return Array.from(agents).sort();
-  }, [calls]);
+    
+    return Array.from(agentMap.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [calls, registeredAgents]);
 
   const filteredCalls = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = searchQuery.trim().toLowerCase();
     let filtered = calls;
 
     if (selectedAgent !== "all") {
-      filtered = filtered.filter((c) => c.agentName === selectedAgent);
+      // Filter by agentId (more reliable) or agentName as fallback
+      filtered = filtered.filter((c) => c.agentId === selectedAgent || c.agentName === selectedAgent);
     }
 
     if (selectedSentiment !== "all") {
@@ -113,7 +119,7 @@ export default function CallsPage() {
     }
 
     return filtered;
-  }, [calls, query, selectedAgent, selectedSentiment, selectedStatus]);
+  }, [calls, searchQuery, selectedAgent, selectedSentiment, selectedStatus]);
 
   const stats = useMemo(() => {
     const total = filteredCalls.length;
@@ -125,7 +131,11 @@ export default function CallsPage() {
     return { total, successful, positive, totalCost };
   }, [filteredCalls]);
 
-  if (!ready || loading) {
+  // Combined loading state: auth loading OR (authenticated and data loading)
+  const dataLoading = !!user && (callsLoading || agentsLoading) && (!callsReady || !agentsReady);
+  const loading = !authReady || dataLoading;
+
+  if (loading) {
     return (
       <main className="min-h-screen bg-slate-950 text-slate-50">
         <Topbar />
@@ -181,8 +191,8 @@ export default function CallsPage() {
             <div>
               <label className="mb-1 block text-xs text-slate-400">Search</label>
               <input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Search calls..."
                 className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-100 outline-none placeholder:text-slate-500 focus:border-sky-500 focus:ring-2 focus:ring-sky-500/40"
               />
@@ -195,10 +205,10 @@ export default function CallsPage() {
                 onChange={(e) => setSelectedAgent(e.target.value)}
                 className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-500/40"
               >
-                <option value="all">All Agents</option>
-                {uniqueAgents.map((agent) => (
-                  <option key={agent} value={agent}>
-                    {agent}
+                <option value="all">All Agents ({allAgents.length})</option>
+                {allAgents.map((agent) => (
+                  <option key={agent.id} value={agent.id}>
+                    {agent.name}
                   </option>
                 ))}
               </select>
@@ -236,7 +246,7 @@ export default function CallsPage() {
             <div className="flex items-end">
               <button
                 onClick={() => {
-                  setQuery("");
+                  setSearchQuery("");
                   setSelectedAgent("all");
                   setSelectedSentiment("all");
                   setSelectedStatus("all");
@@ -384,6 +394,23 @@ export default function CallsPage() {
                 )}
               </tbody>
             </table>
+          </div>
+
+          {/* Pagination info and Load More button */}
+          <div className="mt-4 flex items-center justify-between border-t border-slate-800 pt-4">
+            <p className="text-xs text-slate-500">
+              Showing {filteredCalls.length} of {totalLoaded} loaded calls
+              {hasMore && " (more available)"}
+            </p>
+            {hasMore && (
+              <button
+                onClick={loadMore}
+                disabled={callsLoading}
+                className="rounded-lg bg-sky-500/20 px-4 py-2 text-sm font-medium text-sky-300 hover:bg-sky-500/30 disabled:opacity-50"
+              >
+                {callsLoading ? "Loading..." : "Load More Calls"}
+              </button>
+            )}
           </div>
         </section>
       </div>

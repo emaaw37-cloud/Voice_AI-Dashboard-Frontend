@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { onAuthStateChanged } from "firebase/auth";
+import { onAuthStateChanged, type User } from "firebase/auth";
 import { auth } from "../../lib/firebase";
+import { useCalls } from "../../lib/useCalls";
 import { formatDurationShort } from "../../lib/functions";
 import type {
   AnalyticsVolume,
@@ -10,8 +11,6 @@ import type {
   AnalyticsOutcomes,
   AnalyticsMetrics,
 } from "../../lib/types";
-
-const BACKEND_BASE = process.env.NEXT_PUBLIC_BACKEND_URL_BASE || "";
 
 type DateRange = "7d" | "30d" | "90d" | "this_month" | "last_month" | "custom";
 
@@ -76,6 +75,15 @@ function CallVolumeLineChart({
   data: AnalyticsVolume["data"];
   granularity: "daily" | "weekly";
 }) {
+  // Guard against undefined or empty data
+  if (!data || data.length === 0) {
+    return (
+      <div className="flex h-60 items-center justify-center text-slate-500">
+        No call volume data available
+      </div>
+    );
+  }
+
   const maxCalls = Math.max(...data.map((d) => d.calls), 1);
   const width = 640;
   const height = 240;
@@ -179,6 +187,15 @@ function CallVolumeLineChart({
 }
 
 function DonutChart({ data }: { data: AnalyticsSentiment }) {
+  // Guard against undefined or incomplete data
+  if (!data || !data.positive || !data.neutral || !data.negative) {
+    return (
+      <div className="flex h-40 items-center justify-center text-slate-500">
+        No sentiment data available
+      </div>
+    );
+  }
+
   const total = data.positive.count + data.neutral.count + data.negative.count;
   const radius = 60;
   const circumference = 2 * Math.PI * radius;
@@ -267,6 +284,15 @@ function DonutChart({ data }: { data: AnalyticsSentiment }) {
 }
 
 function HorizontalBarChart({ data }: { data: AnalyticsOutcomes }) {
+  // Guard against undefined or incomplete data
+  if (!data || data.successful === undefined || data.failed === undefined) {
+    return (
+      <div className="flex h-40 items-center justify-center text-slate-500">
+        No outcomes data available
+      </div>
+    );
+  }
+
   const max = Math.max(
     data.successful,
     data.failed,
@@ -331,104 +357,111 @@ export default function AnalyticsPage() {
   const [dateRange, setDateRange] = useState<DateRange>("30d");
   const [customStart, setCustomStart] = useState(defaultStart);
   const [customEnd, setCustomEnd] = useState(defaultEnd);
-  const [volume, setVolume] = useState<AnalyticsVolume | null>(null);
-  const [sentiment, setSentiment] = useState<AnalyticsSentiment | null>(null);
-  const [outcomes, setOutcomes] = useState<AnalyticsOutcomes | null>(null);
-  const [metrics, setMetrics] = useState<AnalyticsMetrics | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [user, setUser] = useState<User | null>(null);
+  const [authReady, setAuthReady] = useState(false);
+
+  // Fetch calls directly from Firestore with caching
+  const { 
+    calls, 
+    loading: callsLoading, 
+    error,
+    ready: callsReady 
+  } = useCalls(user?.uid, { 
+    pageSize: 200,     // Larger batches for analytics
+    maxCalls: 1000,    // Need more data for analytics
+    enabled: !!user,   // Only fetch when user is authenticated
+  });
 
   const { start, end } = useMemo(
     () => getDateRange(dateRange, customStart, customEnd),
     [dateRange, customStart, customEnd]
   );
 
-  const [userReady, setUserReady] = useState(false);
-
+  // Handle authentication state
   useEffect(() => {
     if (!auth) {
-      setUserReady(true);
+      setAuthReady(true);
       return;
     }
-    const unsub = onAuthStateChanged(auth, (u) => setUserReady(!!u));
+    const unsub = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setAuthReady(true);
+    });
     return () => unsub();
   }, []);
 
-  useEffect(() => {
-    if (!userReady || !BACKEND_BASE) {
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
-    let cancelled = false;
-    (async () => {
-      try {
-        const user = auth?.currentUser;
-        if (!user || cancelled) return;
-        const token = await user.getIdToken();
-        if (cancelled) return;
-        const q = `start_date=${encodeURIComponent(start)}&end_date=${encodeURIComponent(end)}`;
-        const [volRes, sentRes, outRes, metRes] = await Promise.all([
-          fetch(`${BACKEND_BASE}/getAnalyticsVolume?${q}`, {
-            method: "GET",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${token}`,
-            },
-          }),
-          fetch(`${BACKEND_BASE}/getAnalyticsSentiment?${q}`, {
-            method: "GET",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${token}`,
-            },
-          }),
-          fetch(`${BACKEND_BASE}/getAnalyticsOutcomes?${q}`, {
-            method: "GET",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${token}`,
-            },
-          }),
-          fetch(`${BACKEND_BASE}/getAnalyticsMetrics?${q}`, {
-            method: "GET",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${token}`,
-            },
-          }),
-        ]);
-        if (cancelled) return;
-        const [v, s, o, m] = await Promise.all([
-          volRes.ok ? volRes.json() : null,
-          sentRes.ok ? sentRes.json() : null,
-          outRes.ok ? outRes.json() : null,
-          metRes.ok ? metRes.json() : null,
-        ]);
-        if (cancelled) return;
-        setVolume(v ?? null);
-        setSentiment(s ?? null);
-        setOutcomes(o ?? null);
-        setMetrics(m ?? null);
-        if (!volRes.ok) console.error("getAnalyticsVolume failed", volRes.status, await volRes.text());
-        if (!sentRes.ok) console.error("getAnalyticsSentiment failed", sentRes.status, await sentRes.text());
-        if (!outRes.ok) console.error("getAnalyticsOutcomes failed", outRes.status, await outRes.text());
-        if (!metRes.ok) console.error("getAnalyticsMetrics failed", metRes.status, await metRes.text());
-      } catch (e) {
-        if (!cancelled) {
-          console.error(e);
-          setVolume(null);
-          setSentiment(null);
-          setOutcomes(null);
-          setMetrics(null);
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
+  // Combined loading state
+  const loading = !authReady || (!!user && callsLoading && !callsReady);
+
+  // Filter calls by date range
+  const filteredCalls = useMemo(() => {
+    const startDate = new Date(start);
+    const endDate = new Date(end);
+    endDate.setHours(23, 59, 59, 999);
+    return calls.filter((call) => {
+      const callDate = new Date(call.startTime);
+      return callDate >= startDate && callDate <= endDate;
+    });
+  }, [calls, start, end]);
+
+  // Compute volume data (calls per day)
+  const volume = useMemo<AnalyticsVolume | null>(() => {
+    if (filteredCalls.length === 0) return null;
+    const dateMap = new Map<string, number>();
+    filteredCalls.forEach((call) => {
+      const date = new Date(call.startTime).toISOString().slice(0, 10);
+      dateMap.set(date, (dateMap.get(date) || 0) + 1);
+    });
+    const data = Array.from(dateMap.entries())
+      .map(([date, calls]) => ({ date, calls }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+    return {
+      data,
+      granularity: data.length > 30 ? "weekly" : "daily",
     };
-  }, [userReady, start, end]);
+  }, [filteredCalls]);
+
+  // Compute sentiment distribution
+  const sentiment = useMemo<AnalyticsSentiment | null>(() => {
+    if (filteredCalls.length === 0) return null;
+    let positive = 0, neutral = 0, negative = 0;
+    filteredCalls.forEach((call) => {
+      const s = call.callAnalysis?.userSentiment;
+      if (s === "Positive") positive++;
+      else if (s === "Neutral") neutral++;
+      else if (s === "Negative") negative++;
+    });
+    const total = positive + neutral + negative || 1;
+    return {
+      positive: { count: positive, percentage: (positive / total) * 100 },
+      neutral: { count: neutral, percentage: (neutral / total) * 100 },
+      negative: { count: negative, percentage: (negative / total) * 100 },
+    };
+  }, [filteredCalls]);
+
+  // Compute outcomes
+  const outcomes = useMemo<AnalyticsOutcomes | null>(() => {
+    if (filteredCalls.length === 0) return null;
+    let successful = 0, failed = 0;
+    filteredCalls.forEach((call) => {
+      if (call.callAnalysis?.callSuccessful) successful++;
+      else if (call.status === "ended" || call.status === "failed") failed++;
+    });
+    return { successful, failed };
+  }, [filteredCalls]);
+
+  // Compute metrics
+  const metrics = useMemo<AnalyticsMetrics | null>(() => {
+    if (filteredCalls.length === 0) return null;
+    const totalDuration = filteredCalls.reduce((sum, c) => sum + c.durationSeconds, 0);
+    const successful = filteredCalls.filter((c) => c.callAnalysis?.callSuccessful).length;
+    return {
+      avg_call_duration_seconds: totalDuration / filteredCalls.length,
+      avg_response_time_seconds: 0, // Not available from call data
+      success_rate: filteredCalls.length > 0 ? successful / filteredCalls.length : 0,
+      trends: undefined as any, // Trends require historical comparison
+    };
+  }, [filteredCalls]);
 
   if (loading) {
     return (
@@ -572,55 +605,67 @@ export default function AnalyticsPage() {
                 <tr className="border-b border-slate-800/80">
                   <td className="py-3 pr-4 font-medium">Avg Call Duration</td>
                   <td className="py-3 pr-4">
-                    {formatDurationShort(metrics.avg_call_duration_seconds)}
+                    {formatDurationShort(metrics.avg_call_duration_seconds ?? 0)}
                   </td>
                   <td className="py-3">
-                    <span
-                      className={
-                        metrics.trends.avg_duration.positive
-                          ? "text-emerald-400"
-                          : "text-rose-400"
-                      }
-                    >
-                      {metrics.trends.avg_duration.change_percent >= 0 ? "↑" : "↓"}{" "}
-                      {Math.abs(metrics.trends.avg_duration.change_percent)}%
-                    </span>
+                    {metrics.trends?.avg_duration ? (
+                      <span
+                        className={
+                          metrics.trends.avg_duration.positive
+                            ? "text-emerald-400"
+                            : "text-rose-400"
+                        }
+                      >
+                        {metrics.trends.avg_duration.change_percent >= 0 ? "↑" : "↓"}{" "}
+                        {Math.abs(metrics.trends.avg_duration.change_percent)}%
+                      </span>
+                    ) : (
+                      <span className="text-slate-500">—</span>
+                    )}
                   </td>
                 </tr>
                 <tr className="border-b border-slate-800/80">
                   <td className="py-3 pr-4 font-medium">Avg Response Time</td>
                   <td className="py-3 pr-4">
-                    {metrics.avg_response_time_seconds.toFixed(1)}s
+                    {(metrics.avg_response_time_seconds ?? 0).toFixed(1)}s
                   </td>
                   <td className="py-3">
-                    <span
-                      className={
-                        metrics.trends.avg_response_time.positive
-                          ? "text-emerald-400"
-                          : "text-rose-400"
-                      }
-                    >
-                      {metrics.trends.avg_response_time.change_percent >= 0 ? "↑" : "↓"}{" "}
-                      {Math.abs(metrics.trends.avg_response_time.change_percent)}%
-                    </span>
+                    {metrics.trends?.avg_response_time ? (
+                      <span
+                        className={
+                          metrics.trends.avg_response_time.positive
+                            ? "text-emerald-400"
+                            : "text-rose-400"
+                        }
+                      >
+                        {metrics.trends.avg_response_time.change_percent >= 0 ? "↑" : "↓"}{" "}
+                        {Math.abs(metrics.trends.avg_response_time.change_percent)}%
+                      </span>
+                    ) : (
+                      <span className="text-slate-500">—</span>
+                    )}
                   </td>
                 </tr>
                 <tr>
                   <td className="py-3 pr-4 font-medium">Success Rate</td>
                   <td className="py-3 pr-4">
-                    {(metrics.success_rate * 100).toFixed(0)}%
+                    {((metrics.success_rate ?? 0) * 100).toFixed(0)}%
                   </td>
                   <td className="py-3">
-                    <span
-                      className={
-                        metrics.trends.success_rate.positive
-                          ? "text-emerald-400"
-                          : "text-rose-400"
-                      }
-                    >
-                      {metrics.trends.success_rate.change_percent >= 0 ? "↑" : "↓"}{" "}
-                      {Math.abs(metrics.trends.success_rate.change_percent)}%
-                    </span>
+                    {metrics.trends?.success_rate ? (
+                      <span
+                        className={
+                          metrics.trends.success_rate.positive
+                            ? "text-emerald-400"
+                            : "text-rose-400"
+                        }
+                      >
+                        {metrics.trends.success_rate.change_percent >= 0 ? "↑" : "↓"}{" "}
+                        {Math.abs(metrics.trends.success_rate.change_percent)}%
+                      </span>
+                    ) : (
+                      <span className="text-slate-500">—</span>
+                    )}
                   </td>
                 </tr>
               </tbody>

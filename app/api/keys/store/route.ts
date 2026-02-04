@@ -1,7 +1,42 @@
 import { NextRequest, NextResponse } from "next/server";
 import { doc, setDoc, getDoc, deleteDoc } from "firebase/firestore";
+import { getAuth } from "firebase-admin/auth";
+import { initializeApp, getApps, cert } from "firebase-admin/app";
 import { db } from "../../../lib/firebase";
 import { encryptApiKey } from "../../../lib/encryption";
+
+// Initialize Firebase Admin for server-side auth verification
+if (!getApps().length) {
+  // In production, use service account credentials
+  // In development, uses Application Default Credentials
+  try {
+    initializeApp({
+      projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+    });
+  } catch (e) {
+    console.error("Firebase Admin init failed:", e);
+  }
+}
+
+/**
+ * Verify Firebase ID token from Authorization header
+ * Returns the decoded token with uid, or null if invalid
+ */
+async function verifyAuthToken(request: NextRequest): Promise<{ uid: string } | null> {
+  try {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) {
+      return null;
+    }
+    
+    const token = authHeader.slice(7);
+    const decodedToken = await getAuth().verifyIdToken(token);
+    return { uid: decodedToken.uid };
+  } catch (error) {
+    console.error("Token verification failed:", error);
+    return null;
+  }
+}
 
 /**
  * POST /api/keys/store
@@ -9,6 +44,15 @@ import { encryptApiKey } from "../../../lib/encryption";
  */
 export async function POST(request: NextRequest) {
   try {
+    // Verify authentication
+    const authUser = await verifyAuthToken(request);
+    if (!authUser) {
+      return NextResponse.json(
+        { error: "Unauthorized. Please sign in." },
+        { status: 401 }
+      );
+    }
+
     if (!db) {
       return NextResponse.json(
         { error: "Firebase unavailable. Check .env.local and server logs." },
@@ -21,6 +65,14 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { error: "userId, service, and apiKey are required" },
         { status: 400 }
+      );
+    }
+
+    // Verify the authenticated user matches the requested userId
+    if (authUser.uid !== userId) {
+      return NextResponse.json(
+        { error: "Forbidden. Cannot access other users' data." },
+        { status: 403 }
       );
     }
 
@@ -65,6 +117,15 @@ export async function POST(request: NextRequest) {
  */
 export async function GET(request: NextRequest) {
   try {
+    // Verify authentication
+    const authUser = await verifyAuthToken(request);
+    if (!authUser) {
+      return NextResponse.json(
+        { error: "Unauthorized. Please sign in." },
+        { status: 401 }
+      );
+    }
+
     if (!db) {
       return NextResponse.json(
         { error: "Firebase unavailable. Check .env.local and server logs." },
@@ -79,6 +140,14 @@ export async function GET(request: NextRequest) {
       return NextResponse.json(
         { error: "userId and service are required" },
         { status: 400 }
+      );
+    }
+
+    // Verify the authenticated user matches the requested userId
+    if (authUser.uid !== userId) {
+      return NextResponse.json(
+        { error: "Forbidden. Cannot access other users' data." },
+        { status: 403 }
       );
     }
 
@@ -112,6 +181,15 @@ export async function GET(request: NextRequest) {
  */
 export async function DELETE(request: NextRequest) {
   try {
+    // Verify authentication
+    const authUser = await verifyAuthToken(request);
+    if (!authUser) {
+      return NextResponse.json(
+        { error: "Unauthorized. Please sign in." },
+        { status: 401 }
+      );
+    }
+
     if (!db) {
       return NextResponse.json(
         { error: "Firebase unavailable. Check .env.local and server logs." },
@@ -126,6 +204,14 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json(
         { error: "userId and service are required" },
         { status: 400 }
+      );
+    }
+
+    // Verify the authenticated user matches the requested userId
+    if (authUser.uid !== userId) {
+      return NextResponse.json(
+        { error: "Forbidden. Cannot access other users' data." },
+        { status: 403 }
       );
     }
 
