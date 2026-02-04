@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "../../../lib/firebase";
+import { callBackend } from "@/services/backend";
 import {
   formatSeconds,
   formatUSD,
@@ -12,8 +13,6 @@ import {
 } from "../../../lib/functions";
 import { WaveformPlayer, type WaveformPlayerHandle } from "../../../components/WaveformPlayer";
 import type { CallDetail, TranscriptSegment } from "../../../lib/types";
-
-const BACKEND_BASE = process.env.NEXT_PUBLIC_BACKEND_URL_BASE || "";
 
 function formatDateTime(iso: string) {
   const d = new Date(iso);
@@ -54,7 +53,7 @@ export default function CallDetailPage() {
   const transcriptEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!callId || !BACKEND_BASE) {
+    if (!callId) {
       setLoading(false);
       return;
     }
@@ -69,21 +68,11 @@ export default function CallDetailPage() {
         return;
       }
       try {
-        const token = await user.getIdToken();
-        const res = await fetch(`${BACKEND_BASE}/getCall?call_id=${encodeURIComponent(callId)}`, {
-          method: "GET",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-        });
-        if (res.ok) {
-          const data = (await res.json()) as CallDetail;
-          setCall(data);
-        } else {
-          console.error("getCall failed", res.status, await res.text());
-          setCall(null);
-        }
+        const data = (await callBackend(
+          `getCall?call_id=${encodeURIComponent(callId)}`,
+          { method: "GET" }
+        )) as CallDetail;
+        setCall(data);
       } catch (e) {
         console.error(e);
         setCall(null);

@@ -5,8 +5,7 @@ import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "../../lib/firebase";
 import { formatUSD } from "../../lib/functions";
 import type { BillingCurrentCycle, Invoice } from "../../lib/types";
-
-const BACKEND_BASE = process.env.NEXT_PUBLIC_BACKEND_URL_BASE || "";
+import { callBackend } from "@/services/backend";
 
 function formatDate(dateStr: string): string {
   const date = new Date(dateStr);
@@ -88,7 +87,7 @@ export default function BillingPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!auth || !BACKEND_BASE) {
+    if (!auth) {
       setLoading(false);
       return;
     }
@@ -98,37 +97,12 @@ export default function BillingPage() {
         return;
       }
       try {
-        const token = await user.getIdToken();
-        const [cycleRes, invoicesRes] = await Promise.all([
-          fetch(`${BACKEND_BASE}/getBillingCurrentCycle`, {
-            method: "GET",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${token}`,
-            },
-          }),
-          fetch(`${BACKEND_BASE}/getInvoices`, {
-            method: "GET",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${token}`,
-            },
-          }),
+        const [cycleData, invoicesData] = await Promise.all([
+          callBackend("getBillingCurrentCycle", { method: "GET" }) as Promise<BillingCurrentCycle>,
+          callBackend("getInvoices", { method: "GET" }) as Promise<Invoice[]>,
         ]);
-        if (cycleRes.ok) {
-          const data = (await cycleRes.json()) as BillingCurrentCycle;
-          setCurrentCycle(data);
-        } else {
-          console.error("getBillingCurrentCycle failed", cycleRes.status, await cycleRes.text());
-          setCurrentCycle(null);
-        }
-        if (invoicesRes.ok) {
-          const data = (await invoicesRes.json()) as Invoice[];
-          setInvoices(data);
-        } else {
-          console.error("getInvoices failed", invoicesRes.status, await invoicesRes.text());
-          setInvoices([]);
-        }
+        setCurrentCycle(cycleData);
+        setInvoices(invoicesData);
       } catch (e) {
         console.error(e);
         setCurrentCycle(null);

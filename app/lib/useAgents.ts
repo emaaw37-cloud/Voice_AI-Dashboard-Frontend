@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { User } from "firebase/auth";
 import type { Agent } from "./types";
+import { callBackend } from "@/services/backend";
 
 export interface UseAgentsOptions {
   /** Whether to enable the query (default: true when user is provided) */
@@ -74,34 +75,7 @@ export function useAgents(
     }
 
     try {
-      const token = await user.getIdToken();
-      const baseUrl = process.env.NEXT_PUBLIC_BACKEND_URL_BASE || "";
-      
-      if (!baseUrl) {
-        throw new Error("Backend URL not configured");
-      }
-      
-      const response = await fetch(`${baseUrl}/getAgents`, {
-        method: "GET",
-        headers: {
-          "Authorization": `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-      });
-
-      if (!response.ok) {
-        // Don't throw for 404 - might just mean no agents registered yet
-        if (response.status === 404) {
-          if (isMountedRef.current) {
-            setAgents([]);
-            setHasFetched(true);
-          }
-          return;
-        }
-        throw new Error(`Failed to fetch agents: ${response.status}`);
-      }
-
-      const data = await response.json();
+      const data = await callBackend("getAgents", { method: "GET" });
       
       if (isMountedRef.current) {
         if (data?.agents && Array.isArray(data.agents)) {
@@ -168,21 +142,10 @@ export function useAgents(
  * Fetch agents directly (non-hook version for use in callbacks)
  */
 export async function fetchAgentsFromApi(user: User): Promise<Agent[]> {
-  const token = await user.getIdToken();
-  const baseUrl = process.env.NEXT_PUBLIC_BACKEND_URL_BASE || "";
-  
-  const response = await fetch(`${baseUrl}/getAgents`, {
-    method: "GET",
-    headers: {
-      "Authorization": `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch agents: ${response.status}`);
+  if (!user) {
+    throw new Error("User not authenticated");
   }
 
-  const data = await response.json();
+  const data = await callBackend("getAgents", { method: "GET" });
   return data?.agents || [];
 }
