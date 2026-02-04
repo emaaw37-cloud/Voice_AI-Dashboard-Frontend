@@ -1,34 +1,40 @@
+// src/lib/firebase.ts
 import { initializeApp, getApps, getApp, type FirebaseApp } from "firebase/app";
 import { getAuth, type Auth } from "firebase/auth";
 import { getFirestore, type Firestore } from "firebase/firestore";
 import { getFunctions, type Functions } from "firebase/functions";
 
+// Firebase config from Vercel Environment Variables
 const firebaseConfig = {
-  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY ?? "",
-  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN ?? "",
-  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ?? "",
-  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET ?? "",
-  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID ?? "",
-  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID ?? "",
+  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY!,
+  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN!,
+  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID!,
+  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET!,
+  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID!,
+  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID!,
 };
 
-let _auth: Auth | null = null;
-let _db: Firestore | null = null;
-let _app: FirebaseApp | null = null;
-let _functions: Functions | null = null;
+let app: FirebaseApp;
+let auth: Auth;
+let db: Firestore;
+let functions: Functions;
 
 try {
-  const app: FirebaseApp =
-    !getApps().length ? initializeApp(firebaseConfig) : getApp();
-  _app = app;
-  _auth = getAuth(app);
-  _db = getFirestore(app);
-  _functions = getFunctions(app);
-} catch (e) {
-  console.error("Firebase init failed (app will run with limited features):", e);
+  app = getApps().length ? getApp() : initializeApp(firebaseConfig);
+
+  // Client-safe services
+  auth = getAuth(app);
+  db = getFirestore(app);
+
+  // Cloud Functions (region optional – adjust if needed)
+  functions = getFunctions(app);
+
+} catch (error) {
+  console.error(
+    "🔥 Firebase init failed (check NEXT_PUBLIC_ env vars):",
+    error
+  );
+  throw error; // Fail fast in production (prevents silent bugs)
 }
 
-export const app: FirebaseApp | null = _app;
-export const auth: Auth | null = _auth;
-export const db: Firestore | null = _db;
-export const functions: Functions | null = _functions;
+export { app, auth, db, functions };
