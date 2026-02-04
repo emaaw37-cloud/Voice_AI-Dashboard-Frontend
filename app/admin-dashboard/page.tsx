@@ -4,37 +4,29 @@ import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "../context/AuthContext";
 import { AdminRoute } from "../components/ProtectedRoute";
-
-interface UserItem {
-  uid: string;
-  email: string;
-  businessName?: string;
-  role: "admin" | "user";
-  isActive: boolean;
-  createdAt: string;
-}
-
-interface ApiKeyStatus {
-  configured: boolean;
-  lastUpdated: string | null;
-}
-
-interface AgentItem {
-  agentId: string;
-  agentName: string | null;
-  userId: string;
-  userEmail: string | null;
-  userBusinessName?: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
+import {
+  type AdminAgentItem,
+  type AdminApiKeyStatus,
+  type AdminUserItem,
+  type GetAdminAgentsResponse,
+  type GetAdminApiKeysResponse,
+  type ListUsersResponse,
+  assignAgentToUser,
+  createUserByAdmin,
+  deleteAgent,
+  getAdminAgents,
+  getAdminApiKeys,
+  listUsers,
+  saveAdminApiKeys,
+  updateUserActiveStatus,
+} from "../services/adminService";
 
 function AdminDashboardContent() {
   const router = useRouter();
   const { user, profile, signOut } = useAuth();
   
   // Users state
-  const [users, setUsers] = useState<UserItem[]>([]);
+  const [users, setUsers] = useState<AdminUserItem[]>([]);
   const [loadingUsers, setLoadingUsers] = useState(true);
   
   // Create user form
@@ -48,8 +40,8 @@ function AdminDashboardContent() {
   
   // API Keys state
   const [apiKeyStatus, setApiKeyStatus] = useState<{
-    retell: ApiKeyStatus;
-    openrouter: ApiKeyStatus;
+    retell: AdminApiKeyStatus;
+    openrouter: AdminApiKeyStatus;
   } | null>(null);
   const [retellKey, setRetellKey] = useState("");
   const [openrouterKey, setOpenrouterKey] = useState("");
@@ -58,7 +50,7 @@ function AdminDashboardContent() {
   const [keySuccess, setKeySuccess] = useState<string | null>(null);
 
   // Agents state
-  const [agents, setAgents] = useState<AgentItem[]>([]);
+  const [agents, setAgents] = useState<AdminAgentItem[]>([]);
   const [loadingAgents, setLoadingAgents] = useState(true);
   const [newAgentId, setNewAgentId] = useState("");
   const [newAgentName, setNewAgentName] = useState("");
@@ -68,68 +60,45 @@ function AdminDashboardContent() {
   const [agentSuccess, setAgentSuccess] = useState<string | null>(null);
   const [deletingAgentId, setDeletingAgentId] = useState<string | null>(null);
 
-  const baseUrl = process.env.NEXT_PUBLIC_BACKEND_URL_BASE || "";
-
   // Fetch users
   const fetchUsers = useCallback(async () => {
     if (!user) return;
     
     try {
-      const token = await user.getIdToken();
-      const res = await fetch(`${baseUrl}/listUsers`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      
-      if (!res.ok) throw new Error("Failed to fetch users");
-      
-      const data = await res.json();
+      const data: ListUsersResponse = await listUsers();
       setUsers(data.users || []);
     } catch (err) {
       console.error("Failed to fetch users:", err);
     } finally {
       setLoadingUsers(false);
     }
-  }, [user, baseUrl]);
+  }, [user]);
 
   // Fetch API key status
   const fetchApiKeyStatus = useCallback(async () => {
     if (!user) return;
     
     try {
-      const token = await user.getIdToken();
-      const res = await fetch(`${baseUrl}/adminApiKeys`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      
-      if (!res.ok) throw new Error("Failed to fetch API key status");
-      
-      const data = await res.json();
+      const data: GetAdminApiKeysResponse = await getAdminApiKeys();
       setApiKeyStatus(data);
     } catch (err) {
       console.error("Failed to fetch API key status:", err);
     }
-  }, [user, baseUrl]);
+  }, [user]);
 
   // Fetch agents
   const fetchAgents = useCallback(async () => {
     if (!user) return;
     
     try {
-      const token = await user.getIdToken();
-      const res = await fetch(`${baseUrl}/adminAgents`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      
-      if (!res.ok) throw new Error("Failed to fetch agents");
-      
-      const data = await res.json();
+      const data: GetAdminAgentsResponse = await getAdminAgents();
       setAgents(data.agents || []);
     } catch (err) {
       console.error("Failed to fetch agents:", err);
     } finally {
       setLoadingAgents(false);
     }
-  }, [user, baseUrl]);
+  }, [user]);
 
   useEffect(() => {
     fetchUsers();
@@ -137,7 +106,7 @@ function AdminDashboardContent() {
     fetchAgents();
   }, [fetchUsers, fetchApiKeyStatus, fetchAgents]);
 
-  const agentByUserId = new Map<string, AgentItem>();
+  const agentByUserId = new Map<string, AdminAgentItem>();
   agents.forEach((agent) => {
     if (!agentByUserId.has(agent.userId)) {
       agentByUserId.set(agent.userId, agent);
@@ -154,47 +123,21 @@ function AdminDashboardContent() {
     setCreateSuccess(null);
 
     try {
-      const token = await user.getIdToken();
-      const res = await fetch(`${baseUrl}/createUserByAdmin`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          email: newEmail.trim(),
-          businessName: newBusinessName.trim() || undefined,
-          password: newPassword,
-          role: newRole,
-        }),
+      const data = await createUserByAdmin({
+        email: newEmail.trim(),
+        businessName: newBusinessName.trim() || undefined,
+        password: newPassword,
+        role: newRole,
       });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error || "Failed to create user");
-      }
 
       const createdUserId = data.user?.uid as string | undefined;
 
       if (createdUserId && newAgentId.trim()) {
-        const agentRes = await fetch(`${baseUrl}/adminAgents`, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            agentId: newAgentId.trim(),
-            userId: createdUserId,
-            agentName: newAgentName.trim() || undefined,
-          }),
+        await assignAgentToUser({
+          agentId: newAgentId.trim(),
+          userId: createdUserId,
+          agentName: newAgentName.trim() || undefined,
         });
-
-        if (!agentRes.ok) {
-          const agentData = await agentRes.json().catch(() => ({}));
-          throw new Error(agentData.error || "Failed to assign agent");
-        }
       }
 
       setCreateSuccess(`User ${data.user.email} created successfully!`);
@@ -218,15 +161,7 @@ function AdminDashboardContent() {
     if (!user) return;
 
     try {
-      const token = await user.getIdToken();
-      await fetch(`${baseUrl}/updateUser`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ uid, isActive: !currentlyActive }),
-      });
+      await updateUserActiveStatus({ uid, isActive: !currentlyActive });
       fetchUsers();
     } catch (err) {
       console.error("Failed to update user:", err);
@@ -243,7 +178,6 @@ function AdminDashboardContent() {
     setKeySuccess(null);
 
     try {
-      const token = await user.getIdToken();
       const body: Record<string, string> = {};
       
       if (retellKey.trim()) body.retell = retellKey.trim();
@@ -254,20 +188,7 @@ function AdminDashboardContent() {
         return;
       }
 
-      const res = await fetch(`${baseUrl}/adminApiKeys`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(body),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error || "Failed to save API keys");
-      }
+      await saveAdminApiKeys(body);
 
       setKeySuccess("API keys updated successfully!");
       setRetellKey("");
@@ -290,25 +211,11 @@ function AdminDashboardContent() {
     setAgentSuccess(null);
 
     try {
-      const token = await user.getIdToken();
-      const res = await fetch(`${baseUrl}/adminAgents`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          agentId: newAgentId.trim(),
-          userId: selectedUserId,
-          agentName: newAgentName.trim() || undefined,
-        }),
+      await assignAgentToUser({
+        agentId: newAgentId.trim(),
+        userId: selectedUserId,
+        agentName: newAgentName.trim() || undefined,
       });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error || "Failed to assign agent");
-      }
 
       setAgentSuccess(`Agent ${newAgentId} assigned successfully!`);
       setNewAgentId("");
@@ -332,20 +239,7 @@ function AdminDashboardContent() {
     setDeletingAgentId(agentId);
 
     try {
-      const token = await user.getIdToken();
-      const res = await fetch(`${baseUrl}/adminAgents`, {
-        method: "DELETE",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ agentId }),
-      });
-
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || "Failed to delete agent");
-      }
+      await deleteAgent({ agentId });
 
       fetchAgents();
     } catch (err) {

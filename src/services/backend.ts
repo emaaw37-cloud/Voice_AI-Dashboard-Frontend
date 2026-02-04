@@ -1,35 +1,44 @@
 import { auth } from "@/lib/firebase";
 
-const BACKEND_BASE =
-  process.env.NEXT_PUBLIC_BACKEND_URL_BASE ||
-  process.env.NEXT_PUBLIC_BACKEND_URL?.replace(/\/[^/]+$/, "") ||
-  "";
+/**
+ * Base URL for Firebase Cloud Functions
+ * MUST be set in .env.local and Vercel
+ */
+const BACKEND_BASE = process.env.NEXT_PUBLIC_API_BASE_URL!;
 
 export async function callBackend(
   endpoint: string,
   options: RequestInit = {}
-): Promise<unknown> {
-  const user = auth?.currentUser;
-  const token = user ? await user.getIdToken() : null;
-
+): Promise<any> {
   if (!BACKEND_BASE) {
-    throw new Error("NEXT_PUBLIC_BACKEND_URL_BASE is not set");
+    throw new Error("NEXT_PUBLIC_API_BASE_URL is not set");
   }
 
-  const url = endpoint.startsWith("http") ? endpoint : `${BACKEND_BASE}/${endpoint.replace(/^\//, "")}`;
+  const user = auth.currentUser;
+  if (!user) {
+    throw new Error("User not authenticated");
+  }
+
+  const token = await user.getIdToken();
+
+  const url = endpoint.startsWith("http")
+    ? endpoint
+    : `${BACKEND_BASE}/${endpoint.replace(/^\//, "")}`;
+
   const res = await fetch(url, {
+    method: options.method ?? "POST", // 🔥 DEFAULT POST (fixes 405)
     ...options,
     headers: {
       "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(options.headers as Record<string, string>),
+      Authorization: `Bearer ${token}`, // 🔥 REQUIRED by backend
+      ...(options.headers || {}),
     },
   });
 
   if (!res.ok) {
     const text = await res.text();
-    console.error(`Backend ${endpoint} failed:`, res.status, text);
-    throw new Error(text || "Backend request failed");
+    console.error("Backend error:", res.status, text);
+    throw new Error(text || `Backend request failed (${res.status})`);
   }
 
   return res.json();
